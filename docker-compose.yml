@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  go-api:
+    build: ./go-api
+    container_name: go-api
+    environment:
+      - DATABASE_DSN=host=postgres user=postgres password=postgres dbname=aiverify port=5432 sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - IMAGE_PROCESSOR_ADDR=rust-service:50051
+    ports:
+      - "8080:8080"
+    depends_on:
+      - rust-service
+      - postgres
+      - redis
+    networks:
+      - ai-net
+
+  rust-service:
+    build: ./rust-service
+    container_name: rust-service
+    environment:
+      - TRITON_ENDPOINT=http://triton:8001
+    ports:
+      - "50051:50051"
+    depends_on:
+      - triton
+    networks:
+      - ai-net
+
+  triton:
+    image: nvcr.io/nvidia/tritonserver:23.10-py3
+    container_name: triton
+    command: ["tritonserver", "--model-repository=/models", "--allow-metrics=true"]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./triton/models:/models
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    networks:
+      - ai-net
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=aiverify
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai-net
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ai-net
+
+networks:
+  ai-net:
+    driver: bridge
+
+volumes:
+  postgres_data:

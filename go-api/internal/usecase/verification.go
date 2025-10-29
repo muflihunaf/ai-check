@@ -10,8 +10,8 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 
-    "github.com/example/ai-check/go-api/internal/repository"
-    proto "github.com/example/ai-check/go-api/proto"
+	"github.com/example/ai-check/internal/repository"
+	proto "github.com/example/ai-check/proto"
 )
 
 // VerificationUseCase encapsulates business logic for the verification flow.

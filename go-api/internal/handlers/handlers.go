@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-    "github.com/example/ai-check/go-api/internal/auth"
-    "github.com/example/ai-check/go-api/internal/usecase"
+	"github.com/example/ai-check/internal/auth"
+	"github.com/example/ai-check/internal/usecase"
 )
 
 // RegisterRoutes wires the HTTP handlers to the Gin router.

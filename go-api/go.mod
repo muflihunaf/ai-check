@@ -1,4 +1,4 @@
-module github.com/example/ai-check/go-api
+module github.com/example/ai-check
 
 go 1.22
 

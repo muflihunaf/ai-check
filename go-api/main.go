@@ -13,11 +13,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/example/aiverify/go-api/internal/auth"
-	"github.com/example/aiverify/go-api/internal/grpcclient"
-	"github.com/example/aiverify/go-api/internal/handlers"
-	"github.com/example/aiverify/go-api/internal/repository"
-	"github.com/example/aiverify/go-api/internal/usecase"
+    "github.com/example/ai-check/go-api/internal/auth"
+    "github.com/example/ai-check/go-api/internal/grpcclient"
+    "github.com/example/ai-check/go-api/internal/handlers"
+    "github.com/example/ai-check/go-api/internal/repository"
+    "github.com/example/ai-check/go-api/internal/usecase"
 )
 
 func main() {

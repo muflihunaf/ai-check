@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package verify;
+
+service ImageProcessor {
+  rpc ProcessImage (VerifyRequest) returns (VerifyResponse);
+}
+
+message VerifyRequest {
+  string user_id = 1;
+  bytes image_data = 2;
+}
+
+message VerifyResponse {
+  bool success = 1;
+  float score = 2;
+  string message = 3;
+}

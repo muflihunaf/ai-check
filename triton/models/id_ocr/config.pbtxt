@@ -1,0 +1,17 @@
+name: "id_ocr"
+platform: "tensorrt_plan"
+max_batch_size: 1
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 224, 224]
+  }
+]
+output [
+  {
+    name: "text"
+    data_type: TYPE_STRING
+    dims: [1]
+  }
+]

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -147,5 +148,51 @@ func TestGetResultFallsBackToRepositoryWhenCacheMiss(t *testing.T) {
 	}
 	if repo.findCalls != 1 {
 		t.Fatalf("expected repository to be queried once, got %d", repo.findCalls)
+	}
+}
+
+func TestGetResultReturnsCachedPayload(t *testing.T) {
+	createdAt := time.Date(2024, time.January, 15, 10, 30, 0, 0, time.UTC)
+	payload := cachedVerification{
+		RequestID: "req-123",
+		UserID:    "user-42",
+		Score:     0.88,
+		Success:   true,
+		Details:   "cached-details",
+		CreatedAt: createdAt,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+
+	cache := &stubCache{getValues: []string{string(data)}}
+	repo := &stubRepository{}
+	uc := NewVerificationUseCase(repo, cache, &stubProcessor{result: &imageprocessor.Result{}}, zap.NewNop())
+
+	log, err := uc.GetResult(context.Background(), "user-42", "req-123")
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if repo.findCalls != 0 {
+		t.Fatalf("expected repository not to be queried, got %d calls", repo.findCalls)
+	}
+	if log.RequestID != payload.RequestID {
+		t.Fatalf("expected request id %s, got %s", payload.RequestID, log.RequestID)
+	}
+	if log.UserID != payload.UserID {
+		t.Fatalf("expected user id %s, got %s", payload.UserID, log.UserID)
+	}
+	if log.Score != payload.Score {
+		t.Fatalf("expected score %f, got %f", payload.Score, log.Score)
+	}
+	if log.Success != payload.Success {
+		t.Fatalf("expected success %t, got %t", payload.Success, log.Success)
+	}
+	if log.Details != payload.Details {
+		t.Fatalf("expected details %s, got %s", payload.Details, log.Details)
+	}
+	if !log.CreatedAt.Equal(payload.CreatedAt) {
+		t.Fatalf("expected created_at %s, got %s", payload.CreatedAt, log.CreatedAt)
 	}
 }

@@ -78,6 +78,13 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 			return
 		}
 
+		if log.UserID == "" {
+			log.UserID = userID
+		}
+		if log.RequestID == "" {
+			log.RequestID = requestID
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"request_id": log.RequestID,
 			"user_id":    log.UserID,

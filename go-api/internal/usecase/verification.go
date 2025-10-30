@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -32,6 +33,15 @@ type VerificationUseCase struct {
 	retryAttempts  int
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+}
+
+type cachedVerification struct {
+	RequestID string    `json:"request_id"`
+	UserID    string    `json:"user_id"`
+	Score     float32   `json:"score"`
+	Success   bool      `json:"success"`
+	Details   string    `json:"details"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewVerificationUseCase constructs a new use case instance.
@@ -83,8 +93,23 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 		return "", nil, wrapped
 	}
 
+	cached := cachedVerification{
+		RequestID: requestID,
+		UserID:    userID,
+		Score:     log.Score,
+		Success:   log.Success,
+		Details:   log.Details,
+		CreatedAt: log.CreatedAt,
+	}
+
+	serialized, err := json.Marshal(cached)
+	if err != nil {
+		opLogger.Error("failed to serialize verification result", zap.Error(err))
+		return "", nil, err
+	}
+
 	if err := uc.withRedisRetry(ctx, requestID, "cache.set.result", func() error {
-		return uc.cache.Set(ctx, cacheKey, details, 5*time.Minute)
+		return uc.cache.Set(ctx, cacheKey, string(serialized), 5*time.Minute)
 	}); err != nil {
 		opLogger.Error("failed to cache verification result", zap.Error(err))
 		return "", nil, err
@@ -97,7 +122,26 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 func (uc *VerificationUseCase) GetResult(ctx context.Context, userID, requestID string) (*repository.VerificationLog, error) {
 	cacheKey := fmt.Sprintf("verification:%s", requestID)
 	if cached, err := uc.withRedisGet(ctx, requestID, "cache.get.result", cacheKey); err == nil {
-		return &repository.VerificationLog{RequestID: requestID, UserID: userID, Details: cached}, nil
+		var payload cachedVerification
+		if err := json.Unmarshal([]byte(cached), &payload); err != nil {
+			logging.WithOperation(uc.logger, "usecase.get_result", requestID).Warn("failed to decode cached result", zap.Error(err))
+		} else {
+			log := &repository.VerificationLog{
+				RequestID: requestID,
+				UserID:    userID,
+				Score:     payload.Score,
+				Success:   payload.Success,
+				Details:   payload.Details,
+				CreatedAt: payload.CreatedAt,
+			}
+			if payload.UserID != "" {
+				log.UserID = payload.UserID
+			}
+			if payload.RequestID != "" {
+				log.RequestID = payload.RequestID
+			}
+			return log, nil
+		}
 	} else if !errors.Is(err, redis.Nil) {
 		logging.WithOperation(uc.logger, "usecase.get_result", requestID).Warn("failed to read cache", zap.Error(err))
 	}

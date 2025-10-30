@@ -37,6 +37,13 @@ type VerificationUseCase struct {
 	maxBackoff     time.Duration
 }
 
+// VerificationMetadata captures persisted metadata for a verification request.
+type VerificationMetadata struct {
+	Timestamp time.Time
+	Success   bool
+	Score     float32
+}
+
 type cachedVerification struct {
 	RequestID string    `json:"request_id"`
 	UserID    string    `json:"user_id"`
@@ -67,7 +74,7 @@ func NewVerificationUseCase(repo VerificationRepository, cache Cache, processor 
 }
 
 // VerifyImage orchestrates persistence, caching, and inference calls.
-func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, imageBytes []byte) (string, *imageprocessor.Result, error) {
+func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, imageBytes []byte) (string, *imageprocessor.Result, *VerificationMetadata, error) {
 	requestID := uuid.NewString()
 	opLogger := logging.WithOperation(uc.logger, "usecase.verify_image", requestID)
 
@@ -76,7 +83,7 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 		return uc.cache.Set(ctx, cacheKey, "processing", time.Minute)
 	}); err != nil {
 		opLogger.Error("failed to set processing flag", zap.Error(err))
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	started := time.Now()
@@ -84,7 +91,7 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 	if err != nil {
 		wrapped := logging.NewOperationError("usecase.grpc_process_image", requestID, err)
 		opLogger.Error("grpc processing failed", zap.Error(wrapped))
-		return "", nil, wrapped
+		return "", nil, nil, wrapped
 	}
 	latency := time.Since(started)
 
@@ -104,14 +111,20 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 	if err := uc.repo.SaveLog(ctx, log); err != nil {
 		wrapped := logging.NewOperationError("usecase.save_log", requestID, err)
 		opLogger.Error("failed to persist verification log", zap.Error(wrapped))
-		return "", nil, wrapped
+		return "", nil, nil, wrapped
+	}
+
+	metadata := &VerificationMetadata{
+		Timestamp: log.CreatedAt,
+		Success:   normalizeSuccessFlag(log.Success),
+		Score:     log.Score,
 	}
 
 	cached := cachedVerification{
 		RequestID: requestID,
 		UserID:    userID,
 		Score:     log.Score,
-		Success:   log.Success,
+		Success:   metadata.Success,
 		Details:   log.Details,
 		Hash:      log.SHA1Hash,
 		CreatedAt: log.CreatedAt,
@@ -120,17 +133,21 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 	serialized, err := json.Marshal(cached)
 	if err != nil {
 		opLogger.Error("failed to serialize verification result", zap.Error(err))
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	if err := uc.withRedisRetry(ctx, requestID, "cache.set.result", func() error {
 		return uc.cache.Set(ctx, cacheKey, string(serialized), 5*time.Minute)
 	}); err != nil {
 		opLogger.Error("failed to cache verification result", zap.Error(err))
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
-	return requestID, result, nil
+	return requestID, result, metadata, nil
+}
+
+func normalizeSuccessFlag(success bool) bool {
+	return success
 }
 
 // GetResult retrieves a cached verification outcome or loads from persistence.

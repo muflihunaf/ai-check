@@ -119,12 +119,24 @@ func TestVerifyImageRetriesRedisSet(t *testing.T) {
 	client := &stubProcessor{result: &imageprocessor.Result{Success: true, Score: 0.9}}
 	uc := NewVerificationUseCase(repo, cache, client, zap.NewNop())
 
-	_, resp, err := uc.VerifyImage(context.Background(), "user-1", []byte("image"))
+	_, resp, meta, err := uc.VerifyImage(context.Background(), "user-1", []byte("image"))
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
 	}
 	if !resp.Success {
 		t.Fatalf("expected success response, got %v", resp.Success)
+	}
+	if meta == nil {
+		t.Fatal("expected metadata to be returned")
+	}
+	if meta.Score != resp.Score {
+		t.Fatalf("expected metadata score %.2f, got %.2f", resp.Score, meta.Score)
+	}
+	if meta.Success != resp.Success {
+		t.Fatalf("expected metadata success %v to match response", resp.Success)
+	}
+	if meta.Timestamp.IsZero() {
+		t.Fatal("expected metadata timestamp to be set")
 	}
 	if len(cache.setKeys) < 3 {
 		t.Fatalf("expected at least 3 cache set calls (retry + result), got %d", len(cache.setKeys))
@@ -150,7 +162,7 @@ func TestVerifyImageReturnsOperationErrorOnCacheFailure(t *testing.T) {
 	client := &stubProcessor{result: &imageprocessor.Result{Success: true}}
 	uc := NewVerificationUseCase(repo, cache, client, zap.NewNop())
 
-	_, _, err := uc.VerifyImage(context.Background(), "user-1", []byte("image"))
+	_, _, _, err := uc.VerifyImage(context.Background(), "user-1", []byte("image"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

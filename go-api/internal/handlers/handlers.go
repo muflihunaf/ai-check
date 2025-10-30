@@ -98,18 +98,29 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 			return
 		}
 
-		requestID, result, err := uc.VerifyImage(c.Request.Context(), userID, data)
+		requestID, result, metadata, err := uc.VerifyImage(c.Request.Context(), userID, data)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{
+		response := gin.H{
 			"request_id": requestID,
 			"verified":   result.Success,
 			"score":      result.Score,
 			"message":    result.Message,
-		})
+		}
+
+		if metadata != nil {
+			response["metadata"] = gin.H{
+				"timestamp": metadata.Timestamp,
+				"success":   metadata.Success,
+				"score":     metadata.Score,
+			}
+			response["created_at"] = metadata.Timestamp
+		}
+
+		c.JSON(http.StatusOK, response)
 	})
 
 	protected.GET("/result/:id", func(c *gin.Context) {

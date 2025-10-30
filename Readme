@@ -13,8 +13,11 @@ The Golang API reads the following environment variables at runtime:
 | `IMAGE_PROCESSOR_ADDR` | No | gRPC endpoint for the Rust image processor. Defaults to `rust-service:50051`. |
 | `JWT_SECRET` | Yes (for protected endpoints) | Symmetric key used to validate HMAC-signed bearer tokens. A `dev-secret` fallback is used for local testing but should be overridden in production. |
 | `JWT_AUDIENCE` | No | Expected JWT audience claim. If set, tokens must include this audience value. |
+| `VERIFICATION_CACHE_TTL` | No | Overrides the Redis TTL for cached verification results. Accepts Go duration strings (e.g., `12h`, `36h30m`). Defaults to `24h`. |
 
 The middleware expects bearer tokens containing a `sub` claim, which is propagated to downstream handlers and used to associate verification requests with the authenticated user.
+
+Tenants that require longer or shorter retention can set `VERIFICATION_CACHE_TTL` in their deployment manifests or environment configuration without code changes. When unset or invalid, the service retains cached verification results for 24 hours.
 
 ## Protected endpoints
 

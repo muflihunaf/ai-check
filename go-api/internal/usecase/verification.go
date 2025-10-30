@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -35,7 +37,13 @@ type VerificationUseCase struct {
 	retryAttempts  int
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	resultCacheTTL time.Duration
 }
+
+const (
+	verificationCacheTTLEnv     = "VERIFICATION_CACHE_TTL"
+	defaultVerificationCacheTTL = 24 * time.Hour
+)
 
 // VerificationMetadata captures persisted metadata for a verification request.
 type VerificationMetadata struct {
@@ -62,14 +70,16 @@ type DuplicateReport struct {
 
 // NewVerificationUseCase constructs a new use case instance.
 func NewVerificationUseCase(repo VerificationRepository, cache Cache, processor imageprocessor.Client, logger *zap.Logger) *VerificationUseCase {
+	ucLogger := logger.Named("verification_usecase")
 	return &VerificationUseCase{
 		repo:           repo,
 		cache:          cache,
 		processor:      processor,
-		logger:         logger.Named("verification_usecase"),
+		logger:         ucLogger,
 		retryAttempts:  3,
 		initialBackoff: 50 * time.Millisecond,
 		maxBackoff:     time.Second,
+		resultCacheTTL: resolveVerificationCacheTTL(ucLogger),
 	}
 }
 
@@ -137,7 +147,7 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 	}
 
 	if err := uc.withRedisRetry(ctx, requestID, "cache.set.result", func() error {
-		return uc.cache.Set(ctx, cacheKey, string(serialized), 5*time.Minute)
+		return uc.cache.Set(ctx, cacheKey, string(serialized), uc.resultCacheTTL)
 	}); err != nil {
 		opLogger.Error("failed to cache verification result", zap.Error(err))
 		return "", nil, nil, err
@@ -148,6 +158,24 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 
 func normalizeSuccessFlag(success bool) bool {
 	return success
+}
+
+func resolveVerificationCacheTTL(logger *zap.Logger) time.Duration {
+	value := strings.TrimSpace(os.Getenv(verificationCacheTTLEnv))
+	if value == "" {
+		return defaultVerificationCacheTTL
+	}
+
+	ttl, err := time.ParseDuration(value)
+	if err != nil {
+		logger.Warn("invalid verification cache TTL; falling back to default", zap.String("value", value), zap.Error(err))
+		return defaultVerificationCacheTTL
+	}
+	if ttl <= 0 {
+		logger.Warn("non-positive verification cache TTL; falling back to default", zap.String("value", value))
+		return defaultVerificationCacheTTL
+	}
+	return ttl
 }
 
 // GetResult retrieves a cached verification outcome or loads from persistence.

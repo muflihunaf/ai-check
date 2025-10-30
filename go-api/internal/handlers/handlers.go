@@ -53,9 +53,9 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 
 		c.JSON(http.StatusOK, gin.H{
 			"request_id": requestID,
-			"verified":   result.GetSuccess(),
-			"score":      result.GetScore(),
-			"message":    result.GetMessage(),
+			"verified":   result.Success,
+			"score":      result.Score,
+			"message":    result.Message,
 		})
 	})
 

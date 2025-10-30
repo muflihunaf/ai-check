@@ -23,6 +23,7 @@ type VerificationRepository interface {
 	SaveLog(ctx context.Context, log *repository.VerificationLog) error
 	FindByRequestIDAndUser(ctx context.Context, requestID, userID string) (*repository.VerificationLog, error)
 	FindDuplicatesByHash(ctx context.Context, userID, hash, excludeRequestID string) ([]*repository.VerificationLog, error)
+	AggregateMetrics(ctx context.Context) (*repository.MetricsAggregation, error)
 }
 
 // VerificationUseCase encapsulates business logic for the verification flow.
@@ -78,24 +79,27 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 		return "", nil, err
 	}
 
+	started := time.Now()
 	result, err := uc.processor.Process(ctx, userID, imageBytes)
 	if err != nil {
 		wrapped := logging.NewOperationError("usecase.grpc_process_image", requestID, err)
 		opLogger.Error("grpc processing failed", zap.Error(wrapped))
 		return "", nil, wrapped
 	}
+	latency := time.Since(started)
 
 	hash := sha1.Sum(imageBytes)
 	hashHex := hex.EncodeToString(hash[:])
 	log := &repository.VerificationLog{
-		RequestID: requestID,
-		UserID:    userID,
-		Score:     result.Score,
-		Success:   result.Success,
-		CreatedAt: time.Now().UTC(),
-		SHA1Hash:  hashHex,
+		RequestID:           requestID,
+		UserID:              userID,
+		Score:               result.Score,
+		Success:             result.Success,
+		CreatedAt:           time.Now().UTC(),
+		SHA1Hash:            hashHex,
+		ProcessingLatencyMs: float64(latency) / float64(time.Millisecond),
 	}
-	details := fmt.Sprintf("status:%t score:%f hash:%s", result.Success, result.Score, hashHex)
+	details := fmt.Sprintf("status:%t score:%f hash:%s latency_ms:%d", result.Success, result.Score, hashHex, latency.Milliseconds())
 	log.Details = details
 	if err := uc.repo.SaveLog(ctx, log); err != nil {
 		wrapped := logging.NewOperationError("usecase.save_log", requestID, err)

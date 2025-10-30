@@ -30,6 +30,27 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 	protected := router.Group("")
 	protected.Use(authMiddleware)
 
+	protected.GET("/metrics/summary", func(c *gin.Context) {
+		if _, ok := auth.GetUserID(c.Request.Context()); !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		summary, err := uc.GetMetricsSummary(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load metrics"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"total_requests":                summary.TotalRequests,
+			"successful_requests":           summary.SuccessfulRequests,
+			"success_rate":                  summary.SuccessRate,
+			"average_score":                 summary.AverageScore,
+			"average_processing_latency_ms": summary.AverageProcessingLatencyMs,
+		})
+	})
+
 	protected.POST("/verify", func(c *gin.Context) {
 		userID, ok := auth.GetUserID(c.Request.Context())
 		if !ok {

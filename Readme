@@ -15,3 +15,14 @@ The Golang API reads the following environment variables at runtime:
 | `JWT_AUDIENCE` | No | Expected JWT audience claim. If set, tokens must include this audience value. |
 
 The middleware expects bearer tokens containing a `sub` claim, which is propagated to downstream handlers and used to associate verification requests with the authenticated user.
+
+## Protected endpoints
+
+The following HTTP endpoints require a valid JWT bearer token signed with `JWT_SECRET` and, when configured, matching the `JWT_AUDIENCE` value. Unauthorized requests receive `401 Unauthorized` responses.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/verify` | Submit an image for verification. |
+| `GET` | `/result/:id` | Retrieve a previously computed verification result. |
+| `GET` | `/duplicates/:id` | Inspect duplicate verification requests that share the same SHA-1 hash. |
+| `GET` | `/metrics/summary` | Return aggregated verification metrics (success rate, average score, processing latency). |

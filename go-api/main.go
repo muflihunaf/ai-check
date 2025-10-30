@@ -2,20 +2,21 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/example/ai-check/internal/auth"
 	"github.com/example/ai-check/internal/grpcclient"
 	"github.com/example/ai-check/internal/handlers"
+	"github.com/example/ai-check/internal/logging"
 	"github.com/example/ai-check/internal/repository"
 	"github.com/example/ai-check/internal/usecase"
 )
@@ -24,22 +25,29 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db := initDatabase(ctx)
-	repo := repository.NewVerificationRepository(db)
+	logger, err := logging.NewLogger()
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Sync() //nolint:errcheck
+
+	db := initDatabase(ctx, logger)
+	repo := repository.NewVerificationRepository(db, logger)
 	if err := repo.AutoMigrate(ctx); err != nil {
-		log.Fatalf("auto migrate failed: %v", err)
+		logger.Fatal("auto migrate failed", zap.Error(err))
 	}
 
-	redisClient := initRedis()
+	redisClient := initRedis(logger)
 
 	imageProcessorAddr := getEnv("IMAGE_PROCESSOR_ADDR", "rust-service:50051")
-	client, conn, err := grpcclient.DialImageProcessor(ctx, imageProcessorAddr)
+	client, conn, err := grpcclient.DialImageProcessor(ctx, imageProcessorAddr, logger)
 	if err != nil {
-		log.Fatalf("failed to connect to image processor: %v", err)
+		logger.Fatal("failed to connect to image processor", zap.Error(err))
 	}
 	defer conn.Close()
 
-	uc := usecase.NewVerificationUseCase(repo, redisClient, client)
+	cache := usecase.NewRedisCache(redisClient)
+	uc := usecase.NewVerificationUseCase(repo, cache, client, logger)
 
 	r := gin.Default()
 
@@ -54,39 +62,39 @@ func main() {
 		Handler: r,
 	}
 
-	log.Println("Golang API listening on :8080")
+	logger.Info("Golang API listening", zap.String("addr", ":8080"))
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+		logger.Fatal("server failed", zap.Error(err))
 	}
 }
 
-func initDatabase(ctx context.Context) *gorm.DB {
+func initDatabase(ctx context.Context, zapLogger *zap.Logger) *gorm.DB {
 	dsn := getEnv("DATABASE_DSN", "host=postgres user=postgres password=postgres dbname=aiverify port=5432 sslmode=disable")
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Info)})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Info)})
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		zapLogger.Fatal("failed to connect to database", zap.Error(err))
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("failed to access db handle: %v", err)
+		zapLogger.Fatal("failed to access db handle", zap.Error(err))
 	}
 	sqlDB.SetMaxIdleConns(5)
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	if err := sqlDB.PingContext(ctx); err != nil {
-		log.Fatalf("database ping failed: %v", err)
+		zapLogger.Fatal("database ping failed", zap.Error(err))
 	}
 
 	return db
 }
 
-func initRedis() *redis.Client {
+func initRedis(zapLogger *zap.Logger) *redis.Client {
 	addr := getEnv("REDIS_ADDR", "redis:6379")
 	client := redis.NewClient(&redis.Options{Addr: addr})
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("redis connection failed: %v", err)
+		zapLogger.Fatal("redis connection failed", zap.Error(err))
 	}
 	return client
 }

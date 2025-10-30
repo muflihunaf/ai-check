@@ -2,9 +2,14 @@ package repository
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/example/ai-check/internal/logging"
 )
 
 // VerificationLog represents a persisted verification request.
@@ -25,29 +30,111 @@ func (VerificationLog) TableName() string {
 
 // VerificationRepository provides persistence APIs for verification logs.
 type VerificationRepository struct {
-	db *gorm.DB
+	db             *gorm.DB
+	logger         *zap.Logger
+	retryAttempts  int
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
 }
 
 // NewVerificationRepository creates a new repository instance.
-func NewVerificationRepository(db *gorm.DB) *VerificationRepository {
-	return &VerificationRepository{db: db}
+func NewVerificationRepository(db *gorm.DB, logger *zap.Logger) *VerificationRepository {
+	return &VerificationRepository{
+		db:             db,
+		logger:         logger.Named("verification_repository"),
+		retryAttempts:  3,
+		initialBackoff: 100 * time.Millisecond,
+		maxBackoff:     2 * time.Second,
+	}
 }
 
 // AutoMigrate ensures the schema is available.
 func (r *VerificationRepository) AutoMigrate(ctx context.Context) error {
-	return r.db.WithContext(ctx).AutoMigrate(&VerificationLog{})
+	return r.executeWithRetry(ctx, "repository.automigrate", "", func() error {
+		return r.db.WithContext(ctx).AutoMigrate(&VerificationLog{})
+	})
 }
 
 // SaveLog persists a verification log entry.
 func (r *VerificationRepository) SaveLog(ctx context.Context, log *VerificationLog) error {
-	return r.db.WithContext(ctx).Create(log).Error
+	requestID := log.RequestID
+	return r.executeWithRetry(ctx, "repository.save_log", requestID, func() error {
+		return r.db.WithContext(ctx).Create(log).Error
+	})
 }
 
 // FindByRequestIDAndUser retrieves a verification log matching the request and owner.
 func (r *VerificationRepository) FindByRequestIDAndUser(ctx context.Context, requestID, userID string) (*VerificationLog, error) {
 	var log VerificationLog
-	if err := r.db.WithContext(ctx).First(&log, "request_id = ? AND user_id = ?", requestID, userID).Error; err != nil {
+	err := r.executeWithRetry(ctx, "repository.find_by_request_and_user", requestID, func() error {
+		return r.db.WithContext(ctx).First(&log, "request_id = ? AND user_id = ?", requestID, userID).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &log, nil
+}
+
+func (r *VerificationRepository) executeWithRetry(ctx context.Context, operation, requestID string, fn func() error) error {
+	if r.retryAttempts <= 1 {
+		return fn()
+	}
+
+	backoff := r.initialBackoff
+	opLogger := logging.WithOperation(r.logger, operation, requestID)
+	var err error
+	for attempt := 0; attempt < r.retryAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return logging.NewOperationError(operation, requestID, ctx.Err())
+			case <-time.After(backoff):
+			}
+			if next := backoff * 2; next <= r.maxBackoff {
+				backoff = next
+			}
+		}
+
+		err = fn()
+		if err == nil {
+			if attempt > 0 {
+				opLogger.Info("operation succeeded after retry", zap.Int("attempt", attempt+1))
+			}
+			return nil
+		}
+
+		if !isTransientError(err) || attempt == r.retryAttempts-1 {
+			opLogger.Error("operation failed", zap.Error(err), zap.Int("attempt", attempt+1))
+			return logging.NewOperationError(operation, requestID, err)
+		}
+
+		opLogger.Warn("transient error encountered", zap.Error(err), zap.Int("attempt", attempt+1))
+	}
+	return logging.NewOperationError(operation, requestID, err)
+}
+
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+
+	var netErr interface{ Timeout() bool }
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var temporary interface{ Temporary() bool }
+	if errors.As(err, &temporary) && temporary.Temporary() {
+		return true
+	}
+
+	return false
 }

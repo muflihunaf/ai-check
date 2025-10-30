@@ -22,6 +22,7 @@ import (
 type VerificationRepository interface {
 	SaveLog(ctx context.Context, log *repository.VerificationLog) error
 	FindByRequestIDAndUser(ctx context.Context, requestID, userID string) (*repository.VerificationLog, error)
+	FindDuplicatesByHash(ctx context.Context, userID, hash, excludeRequestID string) ([]*repository.VerificationLog, error)
 }
 
 // VerificationUseCase encapsulates business logic for the verification flow.
@@ -41,7 +42,14 @@ type cachedVerification struct {
 	Score     float32   `json:"score"`
 	Success   bool      `json:"success"`
 	Details   string    `json:"details"`
+	Hash      string    `json:"sha1_hash"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// DuplicateReport represents duplicate verification entries for a request.
+type DuplicateReport struct {
+	Request    *repository.VerificationLog
+	Duplicates []*repository.VerificationLog
 }
 
 // NewVerificationUseCase constructs a new use case instance.
@@ -78,14 +86,16 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 	}
 
 	hash := sha1.Sum(imageBytes)
+	hashHex := hex.EncodeToString(hash[:])
 	log := &repository.VerificationLog{
 		RequestID: requestID,
 		UserID:    userID,
 		Score:     result.Score,
 		Success:   result.Success,
 		CreatedAt: time.Now().UTC(),
+		SHA1Hash:  hashHex,
 	}
-	details := fmt.Sprintf("status:%t score:%f hash:%s", result.Success, result.Score, hex.EncodeToString(hash[:]))
+	details := fmt.Sprintf("status:%t score:%f hash:%s", result.Success, result.Score, hashHex)
 	log.Details = details
 	if err := uc.repo.SaveLog(ctx, log); err != nil {
 		wrapped := logging.NewOperationError("usecase.save_log", requestID, err)
@@ -99,6 +109,7 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 		Score:     log.Score,
 		Success:   log.Success,
 		Details:   log.Details,
+		Hash:      log.SHA1Hash,
 		CreatedAt: log.CreatedAt,
 	}
 
@@ -132,6 +143,7 @@ func (uc *VerificationUseCase) GetResult(ctx context.Context, userID, requestID 
 				Score:     payload.Score,
 				Success:   payload.Success,
 				Details:   payload.Details,
+				SHA1Hash:  payload.Hash,
 				CreatedAt: payload.CreatedAt,
 			}
 			if payload.UserID != "" {
@@ -151,6 +163,24 @@ func (uc *VerificationUseCase) GetResult(ctx context.Context, userID, requestID 
 		return nil, err
 	}
 	return log, nil
+}
+
+// GetDuplicateReport builds a duplicate detection report for a verification request.
+func (uc *VerificationUseCase) GetDuplicateReport(ctx context.Context, userID, requestID string) (*DuplicateReport, error) {
+	log, err := uc.repo.FindByRequestIDAndUser(ctx, requestID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	duplicates, err := uc.repo.FindDuplicatesByHash(ctx, userID, log.SHA1Hash, log.RequestID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DuplicateReport{
+		Request:    log,
+		Duplicates: duplicates,
+	}, nil
 }
 
 func (uc *VerificationUseCase) withRedisRetry(ctx context.Context, requestID, operation string, fn func() error) error {

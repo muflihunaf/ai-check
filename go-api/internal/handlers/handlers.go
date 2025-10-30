@@ -123,7 +123,47 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 			"score":      log.Score,
 			"success":    log.Success,
 			"details":    log.Details,
+			"sha1_hash":  log.SHA1Hash,
 			"created_at": log.CreatedAt,
+		})
+	})
+
+	protected.GET("/duplicates/:id", func(c *gin.Context) {
+		userID, ok := auth.GetUserID(c.Request.Context())
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		requestID := c.Param("id")
+		if requestID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "id is required"})
+			return
+		}
+
+		report, err := uc.GetDuplicateReport(c.Request.Context(), userID, requestID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
+			return
+		}
+
+		duplicates := make([]gin.H, 0, len(report.Duplicates))
+		for _, duplicate := range report.Duplicates {
+			duplicates = append(duplicates, gin.H{
+				"request_id": duplicate.RequestID,
+				"score":      duplicate.Score,
+				"success":    duplicate.Success,
+				"details":    duplicate.Details,
+				"created_at": duplicate.CreatedAt,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"request_id":      report.Request.RequestID,
+			"user_id":         report.Request.UserID,
+			"sha1_hash":       report.Request.SHA1Hash,
+			"duplicate_count": len(report.Duplicates),
+			"duplicates":      duplicates,
 		})
 	})
 }

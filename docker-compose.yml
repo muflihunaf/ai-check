@@ -22,6 +22,11 @@ services:
     container_name: rust-service
     environment:
       - TRITON_ENDPOINT=http://triton:8001
+      - TRITON_MODEL_NAME=face_verification
+      - TRITON_INPUT_NAME=input
+      - TRITON_OUTPUT_NAME=embedding
+      - TRITON_USE_TLS=0
+      - TRITON_CA_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
     ports:
       - "50051:50051"
     depends_on:

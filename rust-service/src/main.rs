@@ -1,16 +1,9 @@
-mod image;
-mod triton_client;
-
 use std::net::SocketAddr;
 
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{error, info};
 
-use crate::triton_client::TritonClient;
-
-pub mod verify {
-    tonic::include_proto!("verify");
-}
+use rust_service::{image, triton_client::TritonClient, verify};
 
 use verify::image_processor_server::{ImageProcessor, ImageProcessorServer};
 use verify::{VerifyRequest, VerifyResponse};
@@ -36,12 +29,13 @@ impl ImageProcessor for ImageProcessorService {
         let tensor = image::preprocess(&request.image_data)
             .map_err(|err| Status::internal(format!("image preprocessing failed: {err}")))?;
 
-        let score = self
+        let scores = self
             .triton
             .infer(&tensor)
             .await
             .map_err(|err| Status::internal(format!("triton inference failed: {err}")))?;
 
+        let score = scores.first().copied().unwrap_or_default();
         let success = score >= 0.5;
         let response = VerifyResponse {
             success,
@@ -67,9 +61,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = "0.0.0.0:50051".parse()?;
     let triton_endpoint =
         std::env::var("TRITON_ENDPOINT").unwrap_or_else(|_| "http://triton:8001".to_string());
+    let triton_model =
+        std::env::var("TRITON_MODEL_NAME").unwrap_or_else(|_| "face_verification".to_string());
+    let triton_input = std::env::var("TRITON_INPUT_NAME").unwrap_or_else(|_| "input".to_string());
+    let triton_output =
+        std::env::var("TRITON_OUTPUT_NAME").unwrap_or_else(|_| "embedding".to_string());
+    let triton_use_tls = std::env::var("TRITON_USE_TLS")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
+        .unwrap_or(false);
+    let triton_ca_cert = std::env::var("TRITON_CA_CERT_PATH").ok();
 
     let service = ImageProcessorService {
-        triton: TritonClient::new(triton_endpoint),
+        triton: TritonClient::new(
+            triton_endpoint,
+            triton_model,
+            triton_input,
+            triton_output,
+            triton_use_tls,
+            triton_ca_cert,
+        ),
     };
 
     info!(%addr, "Starting Rust image processor");

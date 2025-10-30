@@ -63,15 +63,17 @@ func (s *stubRepository) AggregateMetrics(ctx context.Context) (*repository.Metr
 }
 
 type stubCache struct {
-	setErrs   []error
-	getErrs   []error
-	getValues []string
-	setKeys   []string
-	getKeys   []string
+	setErrs        []error
+	getErrs        []error
+	getValues      []string
+	setKeys        []string
+	getKeys        []string
+	setExpirations []time.Duration
 }
 
 func (s *stubCache) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	s.setKeys = append(s.setKeys, key)
+	s.setExpirations = append(s.setExpirations, expiration)
 	if len(s.setErrs) == 0 {
 		return nil
 	}
@@ -172,6 +174,47 @@ func TestVerifyImageReturnsOperationErrorOnCacheFailure(t *testing.T) {
 	}
 	if opErr.Operation != "cache.set.processing" {
 		t.Fatalf("unexpected operation: %s", opErr.Operation)
+	}
+}
+
+func TestVerifyImageUsesConfiguredResultCacheTTL(t *testing.T) {
+	t.Setenv(verificationCacheTTLEnv, "42m")
+
+	cache := &stubCache{}
+	repo := &stubRepository{}
+	client := &stubProcessor{result: &imageprocessor.Result{Success: true}}
+	uc := NewVerificationUseCase(repo, cache, client, zap.NewNop())
+
+	if _, _, _, err := uc.VerifyImage(context.Background(), "tenant-user", []byte("payload")); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	if len(cache.setExpirations) < 2 {
+		t.Fatalf("expected two cache writes, got %d", len(cache.setExpirations))
+	}
+	expected := 42 * time.Minute
+	if cache.setExpirations[1] != expected {
+		t.Fatalf("expected result cache TTL %s, got %s", expected, cache.setExpirations[1])
+	}
+}
+
+func TestVerifyImageUsesDefaultResultCacheTTLWhenEnvMissing(t *testing.T) {
+	t.Setenv(verificationCacheTTLEnv, "")
+
+	cache := &stubCache{}
+	repo := &stubRepository{}
+	client := &stubProcessor{result: &imageprocessor.Result{Success: true}}
+	uc := NewVerificationUseCase(repo, cache, client, zap.NewNop())
+
+	if _, _, _, err := uc.VerifyImage(context.Background(), "tenant-user", []byte("payload")); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	if len(cache.setExpirations) < 2 {
+		t.Fatalf("expected two cache writes, got %d", len(cache.setExpirations))
+	}
+	if cache.setExpirations[1] != defaultVerificationCacheTTL {
+		t.Fatalf("expected default result cache TTL %s, got %s", defaultVerificationCacheTTL, cache.setExpirations[1])
 	}
 }
 

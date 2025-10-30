@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"time"
@@ -14,14 +15,15 @@ import (
 
 // VerificationLog represents a persisted verification request.
 type VerificationLog struct {
-	ID        uint      `gorm:"primaryKey"`
-	RequestID string    `gorm:"column:request_id;uniqueIndex;size:64"`
-	UserID    string    `gorm:"column:user_id;size:64"`
-	SHA1Hash  string    `gorm:"column:sha1_hash;size:40;not null;index;uniqueIndex:idx_verification_logs_user_hash"`
-	Score     float32   `gorm:"column:score"`
-	Success   bool      `gorm:"column:success"`
-	Details   string    `gorm:"column:details;type:text"`
-	CreatedAt time.Time `gorm:"column:created_at"`
+	ID                  uint      `gorm:"primaryKey"`
+	RequestID           string    `gorm:"column:request_id;uniqueIndex;size:64"`
+	UserID              string    `gorm:"column:user_id;size:64"`
+	SHA1Hash            string    `gorm:"column:sha1_hash;size:40;not null;index;uniqueIndex:idx_verification_logs_user_hash"`
+	Score               float32   `gorm:"column:score"`
+	Success             bool      `gorm:"column:success"`
+	Details             string    `gorm:"column:details;type:text"`
+	ProcessingLatencyMs float64   `gorm:"column:processing_latency_ms"`
+	CreatedAt           time.Time `gorm:"column:created_at"`
 }
 
 // TableName overrides the default table name.
@@ -36,6 +38,14 @@ type VerificationRepository struct {
 	retryAttempts  int
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+}
+
+// MetricsAggregation represents aggregated statistics for verification logs.
+type MetricsAggregation struct {
+	TotalCount                 int64
+	SuccessCount               int64
+	AverageScore               float64
+	AverageProcessingLatencyMs float64
 }
 
 // NewVerificationRepository creates a new repository instance.
@@ -93,6 +103,42 @@ func (r *VerificationRepository) FindDuplicatesByHash(ctx context.Context, userI
 		return nil, err
 	}
 	return logs, nil
+}
+
+// AggregateMetrics returns aggregate statistics across verification logs.
+func (r *VerificationRepository) AggregateMetrics(ctx context.Context) (*MetricsAggregation, error) {
+	type scanResult struct {
+		TotalCount                 int64
+		SuccessCount               int64
+		AverageScore               sql.NullFloat64
+		AverageProcessingLatencyMs sql.NullFloat64
+	}
+
+	var result scanResult
+	err := r.executeWithRetry(ctx, "repository.aggregate_metrics", "", func() error {
+		return r.db.WithContext(ctx).Model(&VerificationLog{}).
+			Select("COUNT(*) AS total_count",
+				"COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) AS success_count",
+				"AVG(score) AS average_score",
+				"AVG(processing_latency_ms) AS average_processing_latency_ms").
+			Scan(&result).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	aggregation := &MetricsAggregation{
+		TotalCount:   result.TotalCount,
+		SuccessCount: result.SuccessCount,
+	}
+	if result.AverageScore.Valid {
+		aggregation.AverageScore = result.AverageScore.Float64
+	}
+	if result.AverageProcessingLatencyMs.Valid {
+		aggregation.AverageProcessingLatencyMs = result.AverageProcessingLatencyMs.Float64
+	}
+
+	return aggregation, nil
 }
 
 func (r *VerificationRepository) executeWithRetry(ctx context.Context, operation, requestID string, fn func() error) error {

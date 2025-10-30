@@ -25,6 +25,8 @@ type stubRepository struct {
 	findCalls  int
 	duplicates []*repository.VerificationLog
 	dupErr     error
+	metrics    *repository.MetricsAggregation
+	metricsErr error
 }
 
 func (s *stubRepository) SaveLog(ctx context.Context, log *repository.VerificationLog) error {
@@ -48,6 +50,16 @@ func (s *stubRepository) FindDuplicatesByHash(ctx context.Context, userID, hash,
 		return nil, s.dupErr
 	}
 	return s.duplicates, nil
+}
+
+func (s *stubRepository) AggregateMetrics(ctx context.Context) (*repository.MetricsAggregation, error) {
+	if s.metricsErr != nil {
+		return nil, s.metricsErr
+	}
+	if s.metrics == nil {
+		return &repository.MetricsAggregation{}, nil
+	}
+	return s.metrics, nil
 }
 
 type stubCache struct {
@@ -126,6 +138,9 @@ func TestVerifyImageRetriesRedisSet(t *testing.T) {
 	expectedHash := sha1.Sum([]byte("image"))
 	if repo.savedLogs[0].SHA1Hash != hex.EncodeToString(expectedHash[:]) {
 		t.Fatalf("expected hash %x, got %s", expectedHash, repo.savedLogs[0].SHA1Hash)
+	}
+	if repo.savedLogs[0].ProcessingLatencyMs <= 0 {
+		t.Fatalf("expected processing latency to be recorded, got %f", repo.savedLogs[0].ProcessingLatencyMs)
 	}
 }
 
@@ -213,5 +228,46 @@ func TestGetResultReturnsCachedPayload(t *testing.T) {
 	}
 	if !log.CreatedAt.Equal(payload.CreatedAt) {
 		t.Fatalf("expected created_at %s, got %s", payload.CreatedAt, log.CreatedAt)
+	}
+}
+
+func TestGetMetricsSummaryComputesSuccessRate(t *testing.T) {
+	repo := &stubRepository{metrics: &repository.MetricsAggregation{
+		TotalCount:                 5,
+		SuccessCount:               3,
+		AverageScore:               0.72,
+		AverageProcessingLatencyMs: 125.5,
+	}}
+	uc := NewVerificationUseCase(repo, &stubCache{}, &stubProcessor{result: &imageprocessor.Result{}}, zap.NewNop())
+
+	summary, err := uc.GetMetricsSummary(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if summary.TotalRequests != 5 {
+		t.Fatalf("expected total 5, got %d", summary.TotalRequests)
+	}
+	if summary.SuccessfulRequests != 3 {
+		t.Fatalf("expected successes 3, got %d", summary.SuccessfulRequests)
+	}
+	expectedRate := 0.6
+	if summary.SuccessRate != expectedRate {
+		t.Fatalf("expected success rate %.2f, got %.2f", expectedRate, summary.SuccessRate)
+	}
+	if summary.AverageScore != 0.72 {
+		t.Fatalf("expected average score 0.72, got %.2f", summary.AverageScore)
+	}
+	if summary.AverageProcessingLatencyMs != 125.5 {
+		t.Fatalf("expected latency 125.5, got %.2f", summary.AverageProcessingLatencyMs)
+	}
+}
+
+func TestGetMetricsSummaryPropagatesRepositoryError(t *testing.T) {
+	repo := &stubRepository{metricsErr: errors.New("db down")}
+	uc := NewVerificationUseCase(repo, &stubCache{}, &stubProcessor{result: &imageprocessor.Result{}}, zap.NewNop())
+
+	_, err := uc.GetMetricsSummary(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }

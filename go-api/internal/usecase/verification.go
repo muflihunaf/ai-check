@@ -10,8 +10,8 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 
-	"github.com/example/aiverify/go-api/internal/repository"
-	proto "github.com/example/aiverify/go-api/proto"
+	"github.com/example/ai-check/internal/repository"
+	proto "github.com/example/ai-check/proto"
 )
 
 // VerificationUseCase encapsulates business logic for the verification flow.
@@ -62,13 +62,13 @@ func (uc *VerificationUseCase) VerifyImage(ctx context.Context, userID string, i
 }
 
 // GetResult retrieves a cached verification outcome or loads from persistence.
-func (uc *VerificationUseCase) GetResult(ctx context.Context, requestID string) (*repository.VerificationLog, error) {
+func (uc *VerificationUseCase) GetResult(ctx context.Context, userID, requestID string) (*repository.VerificationLog, error) {
 	cacheKey := fmt.Sprintf("verification:%s", requestID)
 	if cached, err := uc.cache.Get(ctx, cacheKey).Result(); err == nil {
-		return &repository.VerificationLog{RequestID: requestID, Details: cached}, nil
+		return &repository.VerificationLog{RequestID: requestID, UserID: userID, Details: cached}, nil
 	}
 
-	log, err := uc.repo.FindByRequestID(ctx, requestID)
+	log, err := uc.repo.FindByRequestIDAndUser(ctx, requestID, userID)
 	if err != nil {
 		return nil, err
 	}

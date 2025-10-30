@@ -6,19 +6,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/aiverify/go-api/internal/usecase"
+	"github.com/example/ai-check/internal/auth"
+	"github.com/example/ai-check/internal/usecase"
 )
 
 // RegisterRoutes wires the HTTP handlers to the Gin router.
-func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase) {
+func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMiddleware gin.HandlerFunc) {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	router.POST("/verify", func(c *gin.Context) {
-		userID := c.PostForm("user_id")
-		if userID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
+	protected := router.Group("")
+	protected.Use(authMiddleware)
+
+	protected.POST("/verify", func(c *gin.Context) {
+		userID, ok := auth.GetUserID(c.Request.Context())
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
 
@@ -55,14 +59,20 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase) {
 		})
 	})
 
-	router.GET("/result/:id", func(c *gin.Context) {
+	protected.GET("/result/:id", func(c *gin.Context) {
+		userID, ok := auth.GetUserID(c.Request.Context())
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
 		requestID := c.Param("id")
 		if requestID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "id is required"})
 			return
 		}
 
-		log, err := uc.GetResult(c.Request.Context(), requestID)
+		log, err := uc.GetResult(c.Request.Context(), userID, requestID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
 			return

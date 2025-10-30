@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	proto "github.com/example/aiverify/go-api/proto"
+	proto "github.com/example/ai-check/proto"
 )
 
 // DialImageProcessor returns a ready-to-use gRPC client for the Rust service.

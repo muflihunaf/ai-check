@@ -43,10 +43,10 @@ func (r *VerificationRepository) SaveLog(ctx context.Context, log *VerificationL
 	return r.db.WithContext(ctx).Create(log).Error
 }
 
-// FindByRequestID retrieves a verification log by its request identifier.
-func (r *VerificationRepository) FindByRequestID(ctx context.Context, requestID string) (*VerificationLog, error) {
+// FindByRequestIDAndUser retrieves a verification log matching the request and owner.
+func (r *VerificationRepository) FindByRequestIDAndUser(ctx context.Context, requestID, userID string) (*VerificationLog, error) {
 	var log VerificationLog
-	if err := r.db.WithContext(ctx).First(&log, "request_id = ?", requestID).Error; err != nil {
+	if err := r.db.WithContext(ctx).First(&log, "request_id = ? AND user_id = ?", requestID, userID).Error; err != nil {
 		return nil, err
 	}
 	return &log, nil

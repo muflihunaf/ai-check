@@ -13,10 +13,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/example/aiverify/go-api/internal/grpcclient"
-	"github.com/example/aiverify/go-api/internal/handlers"
-	"github.com/example/aiverify/go-api/internal/repository"
-	"github.com/example/aiverify/go-api/internal/usecase"
+	"github.com/example/ai-check/internal/auth"
+	"github.com/example/ai-check/internal/grpcclient"
+	"github.com/example/ai-check/internal/handlers"
+	"github.com/example/ai-check/internal/repository"
+	"github.com/example/ai-check/internal/usecase"
 )
 
 func main() {
@@ -41,7 +42,12 @@ func main() {
 	uc := usecase.NewVerificationUseCase(repo, redisClient, client)
 
 	r := gin.Default()
-	handlers.RegisterRoutes(r, uc)
+
+	jwtSecret := getEnv("JWT_SECRET", "dev-secret")
+	jwtAudience := os.Getenv("JWT_AUDIENCE")
+	authMiddleware := auth.JWTMiddleware(jwtSecret, jwtAudience)
+
+	handlers.RegisterRoutes(r, uc, authMiddleware)
 
 	server := &http.Server{
 		Addr:    ":8080",

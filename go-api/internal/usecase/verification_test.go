@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -16,11 +18,13 @@ import (
 )
 
 type stubRepository struct {
-	savedLogs []*repository.VerificationLog
-	saveErr   error
-	findLog   *repository.VerificationLog
-	findErr   error
-	findCalls int
+	savedLogs  []*repository.VerificationLog
+	saveErr    error
+	findLog    *repository.VerificationLog
+	findErr    error
+	findCalls  int
+	duplicates []*repository.VerificationLog
+	dupErr     error
 }
 
 func (s *stubRepository) SaveLog(ctx context.Context, log *repository.VerificationLog) error {
@@ -37,6 +41,13 @@ func (s *stubRepository) FindByRequestIDAndUser(ctx context.Context, requestID, 
 		return s.findLog, nil
 	}
 	return nil, errors.New("not found")
+}
+
+func (s *stubRepository) FindDuplicatesByHash(ctx context.Context, userID, hash, excludeRequestID string) ([]*repository.VerificationLog, error) {
+	if s.dupErr != nil {
+		return nil, s.dupErr
+	}
+	return s.duplicates, nil
 }
 
 type stubCache struct {
@@ -112,6 +123,10 @@ func TestVerifyImageRetriesRedisSet(t *testing.T) {
 	if len(repo.savedLogs) != 1 {
 		t.Fatalf("expected log to be saved, got %d entries", len(repo.savedLogs))
 	}
+	expectedHash := sha1.Sum([]byte("image"))
+	if repo.savedLogs[0].SHA1Hash != hex.EncodeToString(expectedHash[:]) {
+		t.Fatalf("expected hash %x, got %s", expectedHash, repo.savedLogs[0].SHA1Hash)
+	}
 }
 
 func TestVerifyImageReturnsOperationErrorOnCacheFailure(t *testing.T) {
@@ -135,7 +150,7 @@ func TestVerifyImageReturnsOperationErrorOnCacheFailure(t *testing.T) {
 
 func TestGetResultFallsBackToRepositoryWhenCacheMiss(t *testing.T) {
 	cache := &stubCache{getErrs: []error{redis.Nil}}
-	expected := &repository.VerificationLog{RequestID: "req", UserID: "user", Details: "from-db"}
+	expected := &repository.VerificationLog{RequestID: "req", UserID: "user", Details: "from-db", SHA1Hash: "abc"}
 	repo := &stubRepository{findLog: expected}
 	uc := NewVerificationUseCase(repo, cache, &stubProcessor{result: &imageprocessor.Result{}}, zap.NewNop())
 
@@ -159,6 +174,7 @@ func TestGetResultReturnsCachedPayload(t *testing.T) {
 		Score:     0.88,
 		Success:   true,
 		Details:   "cached-details",
+		Hash:      "abc123",
 		CreatedAt: createdAt,
 	}
 	data, err := json.Marshal(payload)
@@ -191,6 +207,9 @@ func TestGetResultReturnsCachedPayload(t *testing.T) {
 	}
 	if log.Details != payload.Details {
 		t.Fatalf("expected details %s, got %s", payload.Details, log.Details)
+	}
+	if log.SHA1Hash != payload.Hash {
+		t.Fatalf("expected hash %s, got %s", payload.Hash, log.SHA1Hash)
 	}
 	if !log.CreatedAt.Equal(payload.CreatedAt) {
 		t.Fatalf("expected created_at %s, got %s", payload.CreatedAt, log.CreatedAt)

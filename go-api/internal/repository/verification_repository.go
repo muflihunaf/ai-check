@@ -17,6 +17,7 @@ type VerificationLog struct {
 	ID        uint      `gorm:"primaryKey"`
 	RequestID string    `gorm:"column:request_id;uniqueIndex;size:64"`
 	UserID    string    `gorm:"column:user_id;size:64"`
+	SHA1Hash  string    `gorm:"column:sha1_hash;size:40;not null;index;uniqueIndex:idx_verification_logs_user_hash"`
 	Score     float32   `gorm:"column:score"`
 	Success   bool      `gorm:"column:success"`
 	Details   string    `gorm:"column:details;type:text"`
@@ -73,6 +74,25 @@ func (r *VerificationRepository) FindByRequestIDAndUser(ctx context.Context, req
 		return nil, err
 	}
 	return &log, nil
+}
+
+// FindDuplicatesByHash retrieves verification logs that share the same hash.
+func (r *VerificationRepository) FindDuplicatesByHash(ctx context.Context, userID, hash, excludeRequestID string) ([]*VerificationLog, error) {
+	var logs []*VerificationLog
+	err := r.executeWithRetry(ctx, "repository.find_duplicates_by_hash", excludeRequestID, func() error {
+		query := r.db.WithContext(ctx).Where("sha1_hash = ?", hash)
+		if userID != "" {
+			query = query.Where("user_id = ?", userID)
+		}
+		if excludeRequestID != "" {
+			query = query.Where("request_id <> ?", excludeRequestID)
+		}
+		return query.Order("created_at DESC").Find(&logs).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 func (r *VerificationRepository) executeWithRetry(ctx context.Context, operation, requestID string, fn func() error) error {

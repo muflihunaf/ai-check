@@ -3,12 +3,23 @@ package handlers
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/example/ai-check/internal/auth"
 	"github.com/example/ai-check/internal/usecase"
 )
+
+// MaxUploadSize defines the maximum supported upload size in bytes.
+const MaxUploadSize = 8 << 20 // 8 MiB
+
+var allowedContentTypes = map[string]struct{}{
+	"image/jpeg": {},
+	"image/png":  {},
+	"image/gif":  {},
+	"image/webp": {},
+}
 
 // RegisterRoutes wires the HTTP handlers to the Gin router.
 func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMiddleware gin.HandlerFunc) {
@@ -32,6 +43,21 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 			return
 		}
 
+		if file.Size <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "image file is empty"})
+			return
+		}
+
+		if file.Size > MaxUploadSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image file is too large"})
+			return
+		}
+
+		if !isAllowedContentType(file.Header.Get("Content-Type")) {
+			c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported content type"})
+			return
+		}
+
 		src, err := file.Open()
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unable to open image"})
@@ -39,9 +65,15 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 		}
 		defer src.Close()
 
-		data, err := io.ReadAll(src)
+		limited := io.LimitReader(src, MaxUploadSize+1)
+		data, err := io.ReadAll(limited)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read image"})
+			return
+		}
+
+		if len(data) > MaxUploadSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image file is too large"})
 			return
 		}
 
@@ -94,4 +126,16 @@ func RegisterRoutes(router *gin.Engine, uc *usecase.VerificationUseCase, authMid
 			"created_at": log.CreatedAt,
 		})
 	})
+}
+
+func isAllowedContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if idx := strings.Index(contentType, ";"); idx != -1 {
+		contentType = strings.TrimSpace(contentType[:idx])
+	}
+	if contentType == "" {
+		return false
+	}
+	_, ok := allowedContentTypes[contentType]
+	return ok
 }

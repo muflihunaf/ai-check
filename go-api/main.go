@@ -50,6 +50,7 @@ func main() {
 	uc := usecase.NewVerificationUseCase(repo, cache, client, logger)
 
 	r := gin.Default()
+	r.MaxMultipartMemory = handlers.MaxUploadSize
 
 	jwtSecret := getEnv("JWT_SECRET", "dev-secret")
 	jwtAudience := os.Getenv("JWT_AUDIENCE")
